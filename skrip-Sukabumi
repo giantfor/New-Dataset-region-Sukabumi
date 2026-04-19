@@ -1,0 +1,623 @@
+/***************************************
+ * SUKABUMI LANDSLIDE MAP + DATASET
+ * FINAL FULL SCRIPT - MORE RED & BLACK POINTS
+ ***************************************/
+
+// =====================================
+// 1. PARAMETERS
+// =====================================
+var startDate = '2024-01-01';
+var endDate   = '2024-12-31';
+var rainRefDate = ee.Date(endDate);
+
+var nPoints = 2500;   // more predicted points
+var scale = 30;
+
+// =====================================
+// 2. ADMIN DATA
+// =====================================
+var adm2 = ee.FeatureCollection('FAO/GAUL/2015/level2');
+var indoAdm2 = adm2.filter(ee.Filter.eq('ADM0_NAME', 'Indonesia'));
+
+// =====================================
+// 3. SUKABUMI AOI
+// Flexible matching + fallback polygon
+// =====================================
+var sukabumiRaw = indoAdm2.filter(
+  ee.Filter.and(
+    ee.Filter.or(
+      ee.Filter.eq('ADM2_NAME', 'Sukabumi'),
+      ee.Filter.stringContains('ADM2_NAME', 'Sukabumi')
+    ),
+    ee.Filter.or(
+      ee.Filter.eq('ADM1_NAME', 'West Java'),
+      ee.Filter.eq('ADM1_NAME', 'Jawa Barat'),
+      ee.Filter.stringContains('ADM1_NAME', 'Java'),
+      ee.Filter.stringContains('ADM1_NAME', 'Jawa')
+    )
+  )
+);
+
+// fallback polygon kalau GAUL tidak cocok
+var sukabumiFallback = ee.FeatureCollection([
+  ee.Feature(
+    ee.Geometry.Polygon([
+      [
+        [106.35, -7.60],
+        [107.30, -7.60],
+        [107.30, -6.45],
+        [106.35, -6.45],
+        [106.35, -7.60]
+      ]
+    ]),
+    {name: 'Sukabumi_fallback'}
+  )
+]);
+
+var sukabumi = ee.FeatureCollection(
+  ee.Algorithms.If(
+    sukabumiRaw.size().gt(0),
+    sukabumiRaw,
+    sukabumiFallback
+  )
+);
+
+var aoi = sukabumi.geometry().dissolve();
+
+print('Sukabumi feature count:', sukabumi.size());
+
+Map.clear();
+Map.centerObject(aoi, 10);
+
+// =====================================
+// 4. DISTRICT BOUNDARIES
+// =====================================
+var adminBoundaries = indoAdm2.filterBounds(aoi);
+
+// =====================================
+// 5. CITY / PLACE POINTS
+// =====================================
+var places = ee.FeatureCollection([
+  ee.Feature(ee.Geometry.Point([106.9270, -6.9181]), {name: 'Sukabumi'}),
+  ee.Feature(ee.Geometry.Point([106.9275, -6.9875]), {name: 'Cisaat'}),
+  ee.Feature(ee.Geometry.Point([106.7900, -6.9190]), {name: 'Pelabuhanratu'}),
+  ee.Feature(ee.Geometry.Point([107.0120, -6.8670]), {name: 'Cibadak'}),
+  ee.Feature(ee.Geometry.Point([106.5570, -7.2040]), {name: 'Jampangkulon'})
+]).filterBounds(aoi);
+
+// =====================================
+// 6. MOUNTAIN POINTS
+// =====================================
+var mountains = ee.FeatureCollection([
+  ee.Feature(ee.Geometry.Point([106.9910, -6.7700]), {name: 'Mt. Gede'}),
+  ee.Feature(ee.Geometry.Point([106.7280, -6.7300]), {name: 'Mt. Halimun'}),
+  ee.Feature(ee.Geometry.Point([106.5400, -6.8600]), {name: 'Mt. Salak'})
+]).filterBounds(aoi);
+
+// =====================================
+// 7. OBSERVED LANDSLIDE POINTS (RED)
+// Ganti dengan asset asli jika tersedia
+// =====================================
+var landslidePoints = ee.FeatureCollection([
+  ee.Feature(ee.Geometry.Point([106.9340, -6.9250]), {id: 1}),
+  ee.Feature(ee.Geometry.Point([106.9450, -6.9380]), {id: 2}),
+  ee.Feature(ee.Geometry.Point([106.9550, -6.9480]), {id: 3}),
+  ee.Feature(ee.Geometry.Point([106.9680, -6.9600]), {id: 4}),
+  ee.Feature(ee.Geometry.Point([106.9800, -6.9720]), {id: 5}),
+  ee.Feature(ee.Geometry.Point([106.8200, -6.9300]), {id: 6}),
+  ee.Feature(ee.Geometry.Point([106.8050, -6.9480]), {id: 7}),
+  ee.Feature(ee.Geometry.Point([106.7900, -6.9650]), {id: 8}),
+  ee.Feature(ee.Geometry.Point([106.7750, -6.9820]), {id: 9}),
+  ee.Feature(ee.Geometry.Point([106.7600, -7.0000]), {id: 10}),
+  ee.Feature(ee.Geometry.Point([106.7000, -7.1100]), {id: 11}),
+  ee.Feature(ee.Geometry.Point([106.6750, -7.1300]), {id: 12}),
+  ee.Feature(ee.Geometry.Point([106.6500, -7.1500]), {id: 13}),
+  ee.Feature(ee.Geometry.Point([106.6250, -7.1750]), {id: 14}),
+  ee.Feature(ee.Geometry.Point([106.6000, -7.1950]), {id: 15}),
+  ee.Feature(ee.Geometry.Point([107.0200, -6.8800]), {id: 16}),
+  ee.Feature(ee.Geometry.Point([107.0050, -6.8950]), {id: 17}),
+  ee.Feature(ee.Geometry.Point([106.9900, -6.9100]), {id: 18})
+]).filterBounds(aoi);
+
+// Buffer untuk Ground Truth
+var landslideBuffer = landslidePoints.map(function(f) {
+  return f.buffer(200);
+}).geometry();
+
+// =====================================
+// 8. TOPOGRAPHY
+// =====================================
+var dem = ee.Image('USGS/SRTMGL1_003').clip(aoi);
+var terrain = ee.Terrain.products(dem);
+
+var elevation = dem.rename('Elevation');
+var slope = terrain.select('slope').rename('Slope');
+var aspect = terrain.select('aspect').rename('Aspect');
+var hillshade = terrain.select('hillshade').rename('Hillshade');
+
+var localMean = dem.focal_mean({
+  radius: 90,
+  units: 'meters'
+});
+var tpi = dem.subtract(localMean).rename('TPI');
+var roughness = dem.focal_max(1).subtract(dem.focal_min(1)).rename('Roughness');
+var curvature = dem.convolve(ee.Kernel.laplacian8()).rename('Curvature');
+
+// =====================================
+// 9. TOPOGRAPHY VISUAL
+// =====================================
+var elevationVis = {
+  min: 0,
+  max: 3000,
+  palette: [
+    'd8f3dc','b7e4c7','95d5b2','74c69d','52b788',
+    '40916c','2d6a4f','c2b280','a98467','7f5539','4b2e1f'
+  ]
+};
+
+var contourInterval = 100;
+var contours = dem.divide(contourInterval).floor().multiply(contourInterval);
+var contourLines = contours.subtract(contours.focal_min(1)).neq(0).selfMask();
+
+// =====================================
+// 10. RAINFALL
+// =====================================
+var chirps = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY')
+  .filterBounds(aoi);
+
+var rain7 = chirps
+  .filterDate(rainRefDate.advance(-7, 'day'), rainRefDate)
+  .sum()
+  .rename('Rain_7d');
+
+var rain30 = chirps
+  .filterDate(rainRefDate.advance(-30, 'day'), rainRefDate)
+  .sum()
+  .rename('Rain_30d');
+
+var rainYear = chirps
+  .filterDate(startDate, endDate)
+  .sum()
+  .rename('Rain_year');
+
+// =====================================
+// 11. SENTINEL-2
+// =====================================
+function maskS2(img) {
+  var scl = img.select('SCL');
+  var mask = scl.neq(3)
+    .and(scl.neq(8))
+    .and(scl.neq(9))
+    .and(scl.neq(10))
+    .and(scl.neq(11));
+
+  return img.updateMask(mask).divide(10000);
+}
+
+function addIndices(img) {
+  var ndvi = img.normalizedDifference(['B8', 'B4']).rename('NDVI');
+  var ndmi = img.normalizedDifference(['B8', 'B11']).rename('NDMI');
+  var nbr  = img.normalizedDifference(['B8', 'B12']).rename('NBR');
+
+  var bsi = img.expression(
+    '((SWIR + RED) - (NIR + BLUE)) / ((SWIR + RED) + (NIR + BLUE))',
+    {
+      SWIR: img.select('B11'),
+      RED: img.select('B4'),
+      NIR: img.select('B8'),
+      BLUE: img.select('B2')
+    }
+  ).rename('BSI');
+
+  return img.addBands([ndvi, ndmi, nbr, bsi]);
+}
+
+var s2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+  .filterDate(startDate, endDate)
+  .filterBounds(aoi)
+  .filter(ee.Filter.lte('CLOUDY_PIXEL_PERCENTAGE', 70))
+  .map(maskS2)
+  .map(addIndices);
+
+var s2Median = s2.median().clip(aoi);
+
+var ndvi = s2Median.select('NDVI');
+var ndmi = s2Median.select('NDMI');
+var nbr  = s2Median.select('NBR');
+var bsi  = s2Median.select('BSI');
+
+// =====================================
+// 12. LAND COVER
+// =====================================
+var worldcover = ee.ImageCollection('ESA/WorldCover/v200')
+  .first()
+  .clip(aoi);
+
+var landcover = worldcover.select('Map').rename('Landcover');
+var treecover = landcover.eq(10).rename('Treecover');
+var cropland  = landcover.eq(40).rename('Cropland');
+var builtup   = landcover.eq(50).rename('Builtup');
+
+// =====================================
+// 13. MAJOR RIVERS ONLY
+// =====================================
+var riversRaw = ee.FeatureCollection('WWF/HydroSHEDS/v1/FreeFlowingRivers')
+  .filterBounds(aoi);
+
+var rivers = riversRaw.map(function(f) {
+  return f.set('geom_len', f.geometry().length(1));
+}).filter(ee.Filter.gte('geom_len', 12000));
+
+var riverRaster = ee.Image().byte().paint(rivers, 1).clip(aoi);
+
+var distanceToRiver = riverRaster
+  .not()
+  .distance(ee.Kernel.euclidean(5000, 'meters'))
+  .rename('Distance_to_River');
+
+// =====================================
+// 14. LONGITUDE & LATITUDE
+// =====================================
+var lonlat = ee.Image.pixelLonLat();
+var longitude = lonlat.select('longitude').rename('Longitude');
+var latitude  = lonlat.select('latitude').rename('Latitude');
+
+// =====================================
+// 15. LANDSLIDE PREDICTION SCORE
+// dibuat lebih longgar agar titik hitam lebih banyak
+// =====================================
+var slopeScore = ee.Image(0)
+  .where(slope.gte(6).and(slope.lt(12)), 1)
+  .where(slope.gte(12).and(slope.lt(24)), 2)
+  .where(slope.gte(24), 3);
+
+var rain7Score = ee.Image(0)
+  .where(rain7.gte(30).and(rain7.lt(70)), 1)
+  .where(rain7.gte(70).and(rain7.lt(120)), 2)
+  .where(rain7.gte(120), 3);
+
+var ndmiScore = ee.Image(0)
+  .where(ndmi.gte(0.03).and(ndmi.lt(0.15)), 1)
+  .where(ndmi.gte(0.15).and(ndmi.lt(0.28)), 2)
+  .where(ndmi.gte(0.28), 3);
+
+var tpiAbs = tpi.abs();
+var tpiScore = ee.Image(0)
+  .where(tpiAbs.gte(3).and(tpiAbs.lt(12)), 1)
+  .where(tpiAbs.gte(12).and(tpiAbs.lt(24)), 2)
+  .where(tpiAbs.gte(24), 3);
+
+var riverScore = ee.Image(0)
+  .where(distanceToRiver.lte(1800).and(distanceToRiver.gt(800)), 1)
+  .where(distanceToRiver.lte(800).and(distanceToRiver.gt(300)), 2)
+  .where(distanceToRiver.lte(300), 3);
+
+var landslideScore = slopeScore.multiply(0.30)
+  .add(rain7Score.multiply(0.20))
+  .add(ndmiScore.multiply(0.20))
+  .add(tpiScore.multiply(0.15))
+  .add(riverScore.multiply(0.15))
+  .rename('Landslide_Score');
+
+var predictionClass = ee.Image(1)
+  .where(landslideScore.gte(1.00).and(landslideScore.lt(1.55)), 2)
+  .where(landslideScore.gte(1.55), 3)
+  .rename('Prediction_Class');
+
+// =====================================
+// 16. FEATURE STACK
+// =====================================
+var featuresImage = ee.Image.cat([
+  elevation,
+  slope,
+  aspect,
+  hillshade,
+  tpi,
+  roughness,
+  curvature,
+  rain7,
+  rain30,
+  rainYear,
+  ndvi,
+  ndmi,
+  nbr,
+  bsi,
+  distanceToRiver,
+  landcover,
+  treecover,
+  cropland,
+  builtup,
+  longitude,
+  latitude,
+  landslideScore,
+  predictionClass
+]).clip(aoi).unmask(-9999);
+
+// =====================================
+// 17. SAMPLE DATASET
+// =====================================
+var randomPoints = ee.FeatureCollection.randomPoints({
+  region: aoi,
+  points: nPoints,
+  seed: 42,
+  maxError: 1
+});
+
+var samples = featuresImage.sampleRegions({
+  collection: randomPoints,
+  scale: scale,
+  geometries: true,
+  tileScale: 8
+}).map(function(f) {
+  var coords = f.geometry().coordinates();
+
+  var gt = ee.Number(
+    ee.Algorithms.If(f.geometry().intersects(landslideBuffer, 1), 1, 0)
+  );
+
+  var predClass = ee.Number(f.get('Prediction_Class'));
+  var predLabel = ee.String(
+    ee.Algorithms.If(
+      predClass.eq(3), 'High',
+      ee.Algorithms.If(predClass.eq(2), 'Moderate', 'Low')
+    )
+  );
+
+  return f.set({
+    ID: ee.String(f.get('system:index')),
+    Region: 'Sukabumi',
+    Latitude: coords.get(1),
+    Longitude: coords.get(0),
+    Ground_Truth: gt,
+    Prediction_Landslide: predLabel,
+    Observation_Time: ee.Date(Date.now()).format('YYYY-MM-dd HH:mm:ss')
+  });
+});
+
+print('Sample preview:', samples.limit(5));
+print('Record count:', samples.size());
+
+// =====================================
+// 18. PREDICTED LANDSLIDE POINTS (BLACK)
+// =====================================
+var predictedPoints = samples.filter(ee.Filter.gte('Prediction_Class', 2));
+
+// =====================================
+// 19. MAP DISPLAY
+// =====================================
+Map.addLayer(dem, elevationVis, 'Colored elevation', true);
+
+Map.addLayer(contourLines, {
+  palette: ['000000'],
+  opacity: 0.22
+}, 'Contours 100m', true);
+
+Map.addLayer(
+  rivers.style({
+    color: '#FFD700',
+    width: 2
+  }),
+  {},
+  'Major rivers',
+  true
+);
+
+Map.addLayer(
+  sukabumi.style({
+    color: '#ff0000',
+    fillColor: '00000000',
+    width: 2
+  }),
+  {},
+  'Sukabumi boundary',
+  true
+);
+
+Map.addLayer(
+  adminBoundaries.style({
+    color: '#222222',
+    fillColor: '00000000',
+    width: 1
+  }),
+  {},
+  'District boundaries',
+  false
+);
+
+Map.addLayer(
+  places.style({
+    color: '#000000',
+    pointSize: 3,
+    pointShape: 'circle',
+    width: 1
+  }),
+  {},
+  'Cities / places',
+  true
+);
+
+Map.addLayer(
+  mountains.style({
+    color: '#8B4513',
+    pointSize: 6,
+    pointShape: 'triangle',
+    width: 1
+  }),
+  {},
+  'Mountains',
+  true
+);
+
+Map.addLayer(
+  landslidePoints.style({
+    color: '#FF1A1A',
+    pointSize: 2,
+    pointShape: 'circle',
+    width: 1
+  }),
+  {},
+  'Observed landslides',
+  true
+);
+
+Map.addLayer(
+  predictedPoints.style({
+    color: '#000000',
+    pointSize: 1,
+    pointShape: 'circle',
+    width: 1
+  }),
+  {},
+  'Predicted landslides',
+  true
+);
+
+// =====================================
+// 20. LEGEND (ENGLISH)
+// =====================================
+var legend = ui.Panel({
+  style: {
+    position: 'bottom-right',
+    padding: '10px 12px',
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    width: '220px'
+  }
+});
+
+legend.add(ui.Label({
+  value: 'Map Legend',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '13px',
+    margin: '0 0 8px 0',
+    color: '#111111'
+  }
+}));
+
+function legendRow(color, label, type) {
+  var symbol;
+  if (type === 'line') {
+    symbol = ui.Label({
+      value: '━━',
+      style: {
+        color: color,
+        fontSize: '13px',
+        margin: '0 8px 4px 0'
+      }
+    });
+  } else if (type === 'triangle') {
+    symbol = ui.Label({
+      value: '▲',
+      style: {
+        color: color,
+        fontSize: '14px',
+        margin: '0 8px 4px 0'
+      }
+    });
+  } else {
+    symbol = ui.Label({
+      style: {
+        backgroundColor: color,
+        padding: '6px',
+        margin: '0 8px 4px 0'
+      }
+    });
+  }
+
+  var txt = ui.Label({
+    value: label,
+    style: {
+      fontSize: '11px',
+      margin: '0 0 4px 0'
+    }
+  });
+
+  legend.add(ui.Panel([symbol, txt], ui.Panel.Layout.Flow('horizontal')));
+}
+
+legendRow('#ff0000', 'Sukabumi boundary', 'line');
+legendRow('#FFD700', 'Major rivers', 'line');
+legendRow('#8B4513', 'Mountains', 'triangle');
+legendRow('#FF1A1A', 'Observed landslides', 'box');
+legendRow('#000000', 'Predicted landslides', 'box');
+legendRow('#000000', 'Contours', 'line');
+
+legend.add(ui.Label({
+  value: 'Elevation',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '11px',
+    margin: '8px 0 4px 0'
+  }
+}));
+
+var elevationPalette = [
+  'd8f3dc','b7e4c7','95d5b2','74c69d','52b788',
+  '40916c','2d6a4f','c2b280','a98467','7f5539','4b2e1f'
+];
+
+var colorBar = ui.Thumbnail({
+  image: ee.Image.pixelLonLat().select(0),
+  params: {
+    bbox: [0, 0, 1, 0.1],
+    dimensions: '200x16',
+    format: 'png',
+    min: 0,
+    max: 1,
+    palette: elevationPalette
+  },
+  style: {stretch: 'horizontal', margin: '0px 8px'}
+});
+
+legend.add(colorBar);
+
+legend.add(ui.Panel([
+  ui.Label('Low', {margin: '4px 8px', fontSize: '10px'}),
+  ui.Label('High', {
+    margin: '4px 8px',
+    fontSize: '10px',
+    textAlign: 'right',
+    stretch: 'horizontal'
+  })
+], ui.Panel.Layout.Flow('horizontal')));
+
+Map.add(legend);
+
+// =====================================
+// 21. EXPORT CSV
+// =====================================
+Export.table.toDrive({
+  collection: samples,
+  description: 'Dataset_Landslide_Sukabumi_2500_WithPrediction_GT_Final',
+  fileFormat: 'CSV',
+  selectors: [
+    'ID',
+    'Latitude',
+    'Longitude',
+    'Region',
+    'Elevation',
+    'Slope',
+    'Aspect',
+    'Hillshade',
+    'TPI',
+    'Roughness',
+    'Curvature',
+    'Rain_7d',
+    'Rain_30d',
+    'Rain_year',
+    'NDVI',
+    'NDMI',
+    'NBR',
+    'BSI',
+    'Distance_to_River',
+    'Landcover',
+    'Treecover',
+    'Cropland',
+    'Builtup',
+    'Landslide_Score',
+    'Prediction_Class',
+    'Prediction_Landslide',
+    'Ground_Truth',
+    'Observation_Time'
+  ]
+});
